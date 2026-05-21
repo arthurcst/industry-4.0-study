@@ -1,0 +1,89 @@
+services:
+    mosquitto:
+        image: eclipse-mosquitto:2.0
+        container_name: mosquitto
+        restart: always
+        ports:
+            - "1883:1883" # MQTT
+            - "9001:9001" # WebSocket
+        volumes:
+            - ./mosquitto/mosquitto_data:/mosquitto/data
+            - ./mosquitto/mosquitto_config:/mosquitto/config
+            - ./mosquitto/mosquitto_log:/mosquitto/log
+
+    postgres:
+        image: postgres:14
+        container_name: postgres
+        restart: always
+        environment:
+            POSTGRES_USER: grafana
+            POSTGRES_PASSWORD: grafana
+            POSTGRES_DB: iot_batch
+        ports:
+            - "5432:5432"
+        volumes:
+            - ./postgres_data:/var/lib/postgresql/data
+
+    influxdb:
+        image: influxdb:2.7
+        container_name: influxdb
+        restart: always
+        ports:
+            - "8086:8086"
+        environment:
+            - DOCKER_INFLUXDB_INIT_MODE=setup
+            - DOCKER_INFLUXDB_INIT_USERNAME=admin
+            - DOCKER_INFLUXDB_INIT_PASSWORD=admin123
+            - DOCKER_INFLUXDB_INIT_ORG=my-org
+            - DOCKER_INFLUXDB_INIT_BUCKET=iot_stream
+            - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=my-super-token
+        volumes:
+            - ./influxdb_data:/var/lib/influxdb2
+
+    grafana:
+        image: grafana/grafana:latest
+        container_name: grafana
+        restart: always
+        depends_on:
+            - postgres
+            - influxdb
+        ports:
+            - "3000:3000"
+        volumes:
+            - ./grafana_data:/var/lib/grafana
+
+    batch-consumer:
+        build:
+            context: .
+            dockerfile: Dockerfile.batch
+        container_name: batch_consumer
+        volumes:
+            - ./batches_output:/app/batches_output
+            - ./batches_processed:/app/batches_processed
+        env_file:
+            - docker.env
+        depends_on:
+            - mosquitto
+            - postgres
+
+    stream-consumer:
+        build:
+            context: .
+            dockerfile: Dockerfile.stream
+        container_name: stream_consumer
+        env_file:
+            - docker.env
+        depends_on:
+            - mosquitto
+            - influxdb
+
+    sensor-generator:
+        build:
+            context: .
+            dockerfile: Dockerfile.generator
+        container_name: sensor_generator
+        env_file:
+            - docker.env
+        depends_on:
+            - batch-consumer
+            - stream-consumer

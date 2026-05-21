@@ -1,0 +1,7 @@
+paho-mqtt
+python-dotenv
+psycopg2-binary
+rich
+pydash
+faker
+influxdb-client

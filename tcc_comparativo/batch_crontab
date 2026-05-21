@@ -1,0 +1,1 @@
+*/5 * * * * /usr/local/bin/python /app/cronjob_executor.py >> /app/logs/batch_processor.log 2>&1

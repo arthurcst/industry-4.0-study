@@ -1,0 +1,18 @@
+# Usa imagem base com Python 3.12
+FROM python:3.12-slim
+
+# Define diretório de trabalho dentro do container
+WORKDIR /app
+
+# Copia os arquivos e pastas necessários
+COPY utils/ ./utils/
+COPY sensors/ ./sensors/
+COPY async_consumer.py .
+COPY requirements.txt .
+COPY docker.env ./.env
+
+# Instala as dependências
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Executa o consumidor assíncrono como entrada principal
+CMD ["python", "async_consumer.py"]
