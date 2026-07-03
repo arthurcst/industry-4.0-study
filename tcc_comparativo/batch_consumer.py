@@ -1,7 +1,6 @@
 from datetime import datetime, timezone
-from paho.mqtt import client
 from collections import deque
-
+from dotenv import load_dotenv
 from utils.mqtt_conn import MQTTConnection
 
 import json
@@ -14,26 +13,39 @@ from rich.live import Live
 from rich.table import Table
 from rich import box
 
+load_dotenv()
+
 # ------------------ CONFIGS ------------------ #
+EXPERIMENT_LABEL = os.getenv("EXPERIMENT_LABEL", "1x")
+THRESHOLD = int(os.getenv("BATCH_THRESHOLD", 10_000))
+FLUSH_INTERVAL = int(os.getenv("BATCH_FLUSH_INTERVAL", 60))
+OUTPUT_DIR = os.getenv("BATCH_OUTPUT_DIR", "./batches_output")
+
 BUFFER = deque()
-THRESHOLD = 10_000
-FLUSH_INTERVAL = 60  # segundos
+BUFFER_LOCK = threading.Lock()
+FLUSH_LOCK = threading.Lock()
 LAST_FLUSH = time.time()
 LAST_RECEIVED = time.time()
 FILES_CREATED = 0
 
-OUTPUT_DIR = "./batches_output"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
 # ------------- MÉTRICAS PARA EXIBIÇÃO ------------ #
 def build_metrics_table():
-    table = Table(title="📊 Métricas do Batch Processor", box=box.ROUNDED)
+    table = Table(
+        title=f"📊 Batch Processor [{EXPERIMENT_LABEL}]", box=box.ROUNDED
+    )
     table.add_column("Métrica", style="bold cyan")
     table.add_column("Valor", style="bold white")
 
+    with BUFFER_LOCK:
+        buffer_size = len(BUFFER)
+
+    table.add_row("Experimento", EXPERIMENT_LABEL)
+    table.add_row("Diretório de saída", OUTPUT_DIR)
     table.add_row("Arquivos criados", str(FILES_CREATED))
-    table.add_row("Buffer atual", f"{len(BUFFER)} / {THRESHOLD}")
+    table.add_row("Buffer atual", f"{buffer_size} / {THRESHOLD}")
     tempo = f"{int(time.time() - LAST_RECEIVED)}s"
     table.add_row("Tempo desde última entrada", tempo)
 
@@ -66,28 +78,42 @@ def write_batch_to_csv(batch):
             writer.writerow(row)
 
     FILES_CREATED += 1
-    # print(f"✅ Batch salvo: {filename} ({len(batch)} registros)")
 
 
 # --------------- FLUSH DO BUFFER ------------------ #
 def flush_buffer():
-    batch = list(BUFFER)
-    BUFFER.clear()
-    write_batch_to_csv(batch)
+    global LAST_FLUSH
+
+    if not FLUSH_LOCK.acquire(blocking=False):
+        return
+
+    try:
+        with BUFFER_LOCK:
+            if not BUFFER:
+                return
+            batch = list(BUFFER)
+            BUFFER.clear()
+
+        write_batch_to_csv(batch)
+        LAST_FLUSH = time.time()
+    finally:
+        FLUSH_LOCK.release()
 
 
 # --------------- HANDLER MQTT ------------------ #
 def on_message(client, userdata, msg):
-    global LAST_FLUSH, LAST_RECEIVED
+    global LAST_RECEIVED
+
     payload = json.loads(msg.payload.decode())
-    BUFFER.append(payload)
+
+    with BUFFER_LOCK:
+        BUFFER.append(payload)
+        should_flush = len(BUFFER) >= THRESHOLD
+
     LAST_RECEIVED = time.time()
 
-    now = time.time()
-
-    if len(BUFFER) >= THRESHOLD:
-        flush_buffer()
-        LAST_FLUSH = now
+    if should_flush:
+        threading.Thread(target=flush_buffer, daemon=True).start()
 
 
 # --------------- THREAD: DASHBOARD --------------- #
@@ -100,29 +126,28 @@ def start_live_dashboard():
 
 # --------------- THREAD: FLUSH TEMPORAL --------------- #
 def start_flush_timer():
-    global LAST_FLUSH
     while True:
         time.sleep(1)
         now = time.time()
-        if BUFFER and now - LAST_FLUSH >= FLUSH_INTERVAL:
+        with BUFFER_LOCK:
+            has_data = bool(BUFFER)
+        if has_data and now - LAST_FLUSH >= FLUSH_INTERVAL:
             flush_buffer()
-            LAST_FLUSH = now
 
 
 # --------------------- MAIN --------------------- #
 def main():
-    # Thread 1: Dashboard
-    # threading.Thread(target=start_live_dashboard, daemon=True).start()
+    print(
+        f"🚀 Batch consumer [{EXPERIMENT_LABEL}] → {OUTPUT_DIR} "
+        f"(threshold={THRESHOLD}, flush={FLUSH_INTERVAL}s)"
+    )
 
-    # Thread 2: Flush por tempo
+    # threading.Thread(target=start_live_dashboard, daemon=True).start()
     threading.Thread(target=start_flush_timer, daemon=True).start()
 
-    # Conexão MQTT
     mqtt_client = MQTTConnection(on_message=on_message)
     mqtt_client.connect()
-    print("🚀 Batch consumer iniciado...")
 
-    # Mantém o script vivo
     while True:
         time.sleep(1)
 

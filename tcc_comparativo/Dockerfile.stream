@@ -7,12 +7,11 @@ WORKDIR /app
 # Copia os arquivos e pastas necessários
 COPY utils/ ./utils/
 COPY sensors/ ./sensors/
-COPY async_consumer.py .
+COPY async_consumer_v2.py .
 COPY requirements.txt .
-COPY docker.env ./.env
 
 # Instala as dependências
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Executa o consumidor assíncrono como entrada principal
-CMD ["python", "async_consumer.py"]
+# v2 ativo; rollback: CMD ["python", "async_consumer.py"]
+CMD ["python", "async_consumer_v2.py"]

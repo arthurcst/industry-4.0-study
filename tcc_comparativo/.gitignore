@@ -210,5 +210,12 @@ __marimo__/
 grafana_data/
 influxdb_data/
 kafka_data/
-mosquitto/
+mosquitto/mosquitto_data/*
+!mosquitto/mosquitto_data/.gitkeep
+mosquitto/mosquitto_log/*
+!mosquitto/mosquitto_log/.gitkeep
 postgres_data/
+
+# Experiment runs (dados gerados localmente)
+runs/*
+!runs/.gitkeep

@@ -4,12 +4,12 @@ services:
         container_name: mosquitto
         restart: always
         ports:
-            - "1883:1883" # MQTT
-            - "9001:9001" # WebSocket
+            - "1883:1883"
+            - "9001:9001"
         volumes:
-            - ./mosquitto/mosquitto_data:/mosquitto/data
+            - mosquitto_data:/mosquitto/data
             - ./mosquitto/mosquitto_config:/mosquitto/config
-            - ./mosquitto/mosquitto_log:/mosquitto/log
+            - mosquitto_log:/mosquitto/log
 
     postgres:
         image: postgres:14
@@ -20,9 +20,9 @@ services:
             POSTGRES_PASSWORD: grafana
             POSTGRES_DB: iot_batch
         ports:
-            - "5432:5432"
+            - "5434:5432"
         volumes:
-            - ./postgres_data:/var/lib/postgresql/data
+            - postgres_data:/var/lib/postgresql/data
 
     influxdb:
         image: influxdb:2.7
@@ -35,13 +35,13 @@ services:
             - DOCKER_INFLUXDB_INIT_USERNAME=admin
             - DOCKER_INFLUXDB_INIT_PASSWORD=admin123
             - DOCKER_INFLUXDB_INIT_ORG=my-org
-            - DOCKER_INFLUXDB_INIT_BUCKET=iot_stream
+            - DOCKER_INFLUXDB_INIT_BUCKET=${INFLUXDB_BUCKET:-iot_stream_1x}
             - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=my-super-token
         volumes:
-            - ./influxdb_data:/var/lib/influxdb2
+            - influxdb_data:/var/lib/influxdb2
 
     grafana:
-        image: grafana/grafana:latest
+        image: grafana/grafana:10.4.5
         container_name: grafana
         restart: always
         depends_on:
@@ -49,17 +49,25 @@ services:
             - influxdb
         ports:
             - "3000:3000"
+        environment:
+            - GF_SECURITY_ADMIN_USER=admin
+            - GF_SECURITY_ADMIN_PASSWORD=admin
+            - GF_USERS_ALLOW_SIGN_UP=false
         volumes:
-            - ./grafana_data:/var/lib/grafana
+            - grafana_data:/var/lib/grafana
+            - ./grafana/provisioning:/etc/grafana/provisioning
+            - ./grafana/dashboards:/var/lib/grafana/dashboards
 
     batch-consumer:
         build:
             context: .
             dockerfile: Dockerfile.batch
         container_name: batch_consumer
+        environment:
+            - PYTHONUNBUFFERED=1
         volumes:
-            - ./batches_output:/app/batches_output
-            - ./batches_processed:/app/batches_processed
+            - ${BATCH_OUTPUT_HOST:-./batches_output_1x}:/app/batches_output
+            - ${BATCH_PROCESSED_HOST:-./batches_processed_1x}:/app/batches_processed
         env_file:
             - docker.env
         depends_on:
@@ -71,6 +79,8 @@ services:
             context: .
             dockerfile: Dockerfile.stream
         container_name: stream_consumer
+        environment:
+            - PYTHONUNBUFFERED=1
         env_file:
             - docker.env
         depends_on:
@@ -82,8 +92,16 @@ services:
             context: .
             dockerfile: Dockerfile.generator
         container_name: sensor_generator
+        restart: "no"
         env_file:
             - docker.env
         depends_on:
             - batch-consumer
             - stream-consumer
+
+volumes:
+    postgres_data:
+    influxdb_data:
+    grafana_data:
+    mosquitto_data:
+    mosquitto_log:

@@ -4,42 +4,44 @@ import csv
 from time import time
 import psycopg2
 import psycopg2.extras
-from datetime import datetime, timezone
+from datetime import datetime
 from dotenv import load_dotenv
 import logging
 import shutil
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
+logs_dir = os.path.join(script_dir, "logs")
+os.makedirs(logs_dir, exist_ok=True)
 
-# Configuração de logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[
-        logging.FileHandler(f"{script_dir}/logs/batch_processor.log"),
+        logging.FileHandler(os.path.join(logs_dir, "batch_processor.log")),
         logging.StreamHandler(),
     ],
 )
 
 load_dotenv()
+load_dotenv("/app/cron.env", override=True)
 
-PG_TABLE = (os.getenv("PG_TABLE", "sensor_data"),)
+EXPERIMENT_LABEL = os.getenv("EXPERIMENT_LABEL", "1x")
+PG_TABLE = os.getenv("PG_TABLE", "sensor_data")
 
 
 class CronBatchProcessor:
     def __init__(self):
-        self.batch_dir = f"{script_dir}/batches_output"
-        self.processed_dir = f"{script_dir}/batches_processed"
+        self.batch_dir = os.getenv("BATCH_OUTPUT_DIR", f"{script_dir}/batches_output")
+        self.processed_dir = os.getenv(
+            "BATCH_PROCESSED_DIR", f"{script_dir}/batches_processed"
+        )
         self.connection = None
         self.cursor = None
 
-        # Cria diretórios se não existirem
         os.makedirs(self.processed_dir, exist_ok=True)
-
         self.connect_to_db()
 
     def connect_to_db(self):
-        """Conecta ao PostgreSQL"""
         try:
             self.connection = psycopg2.connect(
                 dbname=os.getenv("PG_DB", "iot_batch"),
@@ -49,20 +51,20 @@ class CronBatchProcessor:
                 port=os.getenv("PG_PORT", "5432"),
             )
             self.cursor = self.connection.cursor()
-            logging.info("✅ Conectado ao PostgreSQL")
+            logging.info(
+                f"✅ Conectado ao PostgreSQL (tabela={PG_TABLE}, exp={EXPERIMENT_LABEL})"
+            )
         except Exception as e:
             logging.error(f"❌ Erro ao conectar PostgreSQL: {e}")
             raise
 
     def find_csv_files(self):
-        """Encontra todos os arquivos CSV pendentes"""
         pattern = os.path.join(self.batch_dir, "*.csv")
         csv_files = glob.glob(pattern)
         logging.info(f"🔍 Encontrados {len(csv_files)} arquivos CSV para processar")
-        return sorted(csv_files)  # Processa em ordem cronológica
+        return sorted(csv_files)
 
     def process_csv_file(self, filepath):
-        """Processa um arquivo CSV individual"""
         start_time = datetime.now()
         batch_id = os.path.basename(filepath).replace(".csv", "")
         records_processed = 0
@@ -75,8 +77,6 @@ class CronBatchProcessor:
                 batch_data = []
 
                 for row in reader:
-                    # (sensor_id, production_line_id, location, metric, unit, ingested_at , value, created_at, batch_id)
-
                     batch_data.append(
                         (
                             row.get("sensor_id"),
@@ -92,11 +92,9 @@ class CronBatchProcessor:
                     )
                     records_processed += 1
 
-                # Bulk insert
                 if batch_data:
                     self.bulk_insert(batch_data)
 
-            # Move arquivo para pasta processada
             self.move_processed_file(filepath)
 
             processing_time = (datetime.now() - start_time).total_seconds()
@@ -120,10 +118,9 @@ class CronBatchProcessor:
             return 0, 0
 
     def bulk_insert(self, batch_data):
-        """Insere dados em lote no PostgreSQL"""
         insert_query = f"""
-            INSERT INTO sensor_data_4x
-            (sensor_id, production_line_id, location, metric, unit, ingested_at , value, created_at, batch_id)
+            INSERT INTO {PG_TABLE}
+            (sensor_id, production_line_id, location, metric, unit, ingested_at, value, created_at, batch_id)
             VALUES %s
         """
         try:
@@ -135,14 +132,13 @@ class CronBatchProcessor:
                 self.connection.commit()
 
         except Exception as e:
-            logging.error(f"❌ Erro no bulk insert: {e}")
+            logging.error(f"❌ Erro no bulk insert em {PG_TABLE}: {e}")
 
             if self.connection:
                 self.connection.rollback()
             raise
 
     def move_processed_file(self, filepath):
-        """Move arquivo processado para pasta de arquivo"""
         try:
             filename = os.path.basename(filepath)
             new_path = os.path.join(self.processed_dir, filename)
@@ -152,7 +148,6 @@ class CronBatchProcessor:
             logging.warning(f"⚠️ Erro ao mover arquivo: {e}")
 
     def run(self):
-        """Execução principal - processa todos os CSVs pendentes"""
         execution_start = datetime.now()
 
         try:
@@ -172,8 +167,8 @@ class CronBatchProcessor:
             execution_time = (datetime.now() - execution_start).total_seconds()
 
             logging.info(
-                f"🎯 EXECUÇÃO CONCLUÍDA: {total_files} arquivos, "
-                f"{total_records} registros em {execution_time:.2f}s"
+                f"🎯 EXECUÇÃO CONCLUÍDA [{EXPERIMENT_LABEL}]: {total_files} arquivos, "
+                f"{total_records} registros em {execution_time:.2f}s → {PG_TABLE}"
             )
 
         except Exception as e:
@@ -182,7 +177,6 @@ class CronBatchProcessor:
             self.close()
 
     def close(self):
-        """Fecha conexões"""
         if self.cursor:
             self.cursor.close()
         if self.connection:

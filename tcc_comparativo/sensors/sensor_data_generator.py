@@ -1,5 +1,4 @@
 from paho.mqtt import client
-from datetime import datetime
 from factory_sensors import SENSORS_01, get_sensors_by_location
 from dotenv import load_dotenv
 from faker import Faker
@@ -13,6 +12,7 @@ import random
 import time
 import json
 import os
+import sys
 
 faker = Faker()
 load_dotenv()
@@ -23,15 +23,16 @@ PORT = int(os.getenv("MQTT_PORT", 1883))
 TOPIC = os.getenv("MQTT_TOPIC")
 CLIENT_ID = os.getenv("MQTT_CLIENT_ID")
 RATE_MODIFIER = int(os.getenv("RATE_MODIFIER", 1))
+EXPERIMENT_LABEL = os.getenv("EXPERIMENT_LABEL", "1x")
 
 # Execução
-EXECUTION_TIME = 30 * 60  # segundos
+EXECUTION_TIME = int(os.getenv("EXECUTION_TIME_SECONDS", 3600))
 START_TIME = time.time()
 
 # Métricas compartilhadas
 metrics = {
     "total": 0,
-    "por_maquina": {},  # { "triturador_01": {"temperatura": 10, "pressao": 5} }
+    "por_maquina": {},
     "conexoes_mqtt": {},
     "threads": 0,
 }
@@ -40,7 +41,9 @@ metrics_lock = threading.Lock()
 
 def build_metrics_table():
     with metrics_lock:
-        table = Table(title="📡 Gerador de Dados", box=box.ROUNDED)
+        table = Table(
+            title=f"📡 Gerador de Dados [{EXPERIMENT_LABEL}]", box=box.ROUNDED
+        )
         table.add_column("Métrica", style="bold cyan")
         table.add_column("Valor", style="bold white")
 
@@ -55,6 +58,7 @@ def build_metrics_table():
         mensagens_por_segundo = metrics["total"] / elapsed_time
         mensagens_por_minuto = mensagens_por_segundo * 60
 
+        table.add_row("Experimento", EXPERIMENT_LABEL)
         table.add_row("Mensagens enviadas", str(metrics["total"]))
         table.add_row("Mensagens por segundo", f"{mensagens_por_segundo:.2f} msg/s")
         table.add_row("Mensagens por minuto", f"{mensagens_por_minuto:.2f} msg/min")
@@ -113,7 +117,7 @@ async def sensor_task(sensor, end_time, mqtt_client):
 
         if TOPIC:
             result = mqtt_client.publish(TOPIC, payload, qos=1)
-            if result[0] == 0:  # sucesso
+            if result[0] == 0:
                 with metrics_lock:
                     metrics["total"] += 1
                     metrics["por_maquina"][maquina][metric] += 1
@@ -129,7 +133,7 @@ def generate_machine_thread(machine_name, sensors, execution_time):
         mqtt_client.loop_start()
         with metrics_lock:
             metrics["conexoes_mqtt"][machine_name] = True
-    except:
+    except Exception:
         with metrics_lock:
             metrics["conexoes_mqtt"][machine_name] = False
         return
@@ -143,13 +147,16 @@ def generate_machine_thread(machine_name, sensors, execution_time):
     loop.run_until_complete(asyncio.gather(*tasks))
     loop.close()
     mqtt_client.loop_stop()
+    mqtt_client.disconnect()
 
 
 def main():
-    print("🔧 Iniciando o gerador de dados...")
+    print(
+        f"🔧 Iniciando gerador [{EXPERIMENT_LABEL}] "
+        f"(RATE_MODIFIER={RATE_MODIFIER}, duração={EXECUTION_TIME}s)..."
+    )
     threads = []
 
-    # Dashboard
     dashboard_thread = threading.Thread(target=start_live_dashboard, daemon=True)
     dashboard_thread.start()
 
@@ -169,10 +176,13 @@ def main():
     for thread in threads:
         thread.join()
 
-    print("✅ Geração de dados finalizada.")
+    elapsed = time.time() - START_TIME
+    print(
+        f"✅ Geração finalizada [{EXPERIMENT_LABEL}]: "
+        f"{metrics['total']} mensagens em {elapsed:.0f}s."
+    )
 
 
 if __name__ == "__main__":
     main()
-    while True:
-        time.sleep(1)
+    sys.exit(0)

@@ -7,7 +7,6 @@ WORKDIR /app
 # Copia arquivos e diretórios necessários
 COPY utils/ ./utils/
 COPY sensors/ ./sensors/
-COPY docker.env .env
 COPY requirements.txt .
 
 # Instala as dependências

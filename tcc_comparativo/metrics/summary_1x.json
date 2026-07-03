@@ -1,0 +1,27 @@
+{
+  "experiment": "1x",
+  "exported_at": "2026-05-24T02:17:42.237015+00:00",
+  "postgres": {
+    "table": "sensor_data_1x",
+    "total_records": 72506,
+    "latency_avg_ms": 513914.8,
+    "latency_min_ms": 40738,
+    "latency_max_ms": 1321903,
+    "latency_p50_ms": 495407.0,
+    "latency_p95_ms": 959229.0
+  },
+  "influxdb": {
+    "bucket": "iot_stream_1x",
+    "total_records": 204753,
+    "latency_avg_ms": null
+  },
+  "batch_files": {
+    "processed_dir": "./batches_processed_1x",
+    "csv_files": 16,
+    "total_rows_in_csvs": 72506
+  },
+  "batch_throughput": {
+    "batches_processed": 16,
+    "avg_throughput_records_per_s": 21292.14
+  }
+}

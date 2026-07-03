@@ -1,0 +1,14 @@
+metric,value
+experiment,1x
+exported_at,2026-05-24T02:17:42.237015+00:00
+pg_table,sensor_data_1x
+pg_total_records,72506
+pg_latency_avg_ms,513914.8
+pg_latency_p50_ms,495407.0
+pg_latency_p95_ms,959229.0
+influx_bucket,iot_stream_1x
+influx_total_records,204753
+influx_latency_avg_ms,
+batch_csv_files,16
+batch_csv_rows,72506
+batch_avg_throughput_rps,21292.14
