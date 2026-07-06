@@ -1,27 +1,48 @@
 {
   "experiment": "1x",
-  "exported_at": "2026-05-24T02:17:42.237015+00:00",
+  "experiment_run_dir": null,
+  "exported_at": "2026-07-04T17:06:37.037260+00:00",
   "postgres": {
     "table": "sensor_data_1x",
-    "total_records": 72506,
-    "latency_avg_ms": 513914.8,
-    "latency_min_ms": 40738,
-    "latency_max_ms": 1321903,
-    "latency_p50_ms": 495407.0,
-    "latency_p95_ms": 959229.0
+    "total_records": 285741,
+    "latency_avg_ms": 181419.38,
+    "latency_min_ms": 3236,
+    "latency_max_ms": 358366,
+    "latency_p50_ms": 181201.0,
+    "latency_p95_ms": 319472.0
   },
   "influxdb": {
     "bucket": "iot_stream_1x",
-    "total_records": 204753,
-    "latency_avg_ms": null
+    "total_records": 285741,
+    "latency_avg_ms": 2.73,
+    "latency_p50_ms": 2.0,
+    "latency_p95_ms": 11.0,
+    "latency_min_ms": -61.0,
+    "latency_max_ms": 161.0
   },
   "batch_files": {
     "processed_dir": "./batches_processed_1x",
-    "csv_files": 16,
-    "total_rows_in_csvs": 72506
+    "csv_files": 0,
+    "total_rows_in_csvs": 0
   },
   "batch_throughput": {
-    "batches_processed": 16,
-    "avg_throughput_records_per_s": 21292.14
+    "batches_processed": 120,
+    "total_records_processed": 571482,
+    "total_processing_seconds": 18.88,
+    "avg_throughput_records_per_s": 30269.17
+  },
+  "stream_consumer": {
+    "contador": 285741,
+    "dropped": 0,
+    "queue_pending": 0,
+    "queue_maxsize": 200000,
+    "points_written": 285741,
+    "parse_errors": 0,
+    "write_errors": 0,
+    "mqtt_total_received": 285741,
+    "source": "periodic_log",
+    "mqtt_enqueued": 285741,
+    "influx_gap_vs_enqueued": 0,
+    "write_gap_vs_enqueued": 0
   }
 }

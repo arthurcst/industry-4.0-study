@@ -219,3 +219,15 @@ postgres_data/
 # Experiment runs (dados gerados localmente)
 runs/*
 !runs/.gitkeep
+
+# Claude Code
+.claude/
+CLAUDE.md
+
+# Cursor
+.cursor/
+.cursorrules
+
+# Superpowers / skills
+.superpowers/
+skills/
