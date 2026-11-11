@@ -8,6 +8,7 @@ import time
 import os
 import csv
 import threading
+import signal
 
 from rich.live import Live
 from rich.table import Table
@@ -16,7 +17,7 @@ from rich import box
 load_dotenv()
 
 # ------------------ CONFIGS ------------------ #
-EXPERIMENT_LABEL = os.getenv("EXPERIMENT_LABEL", "1x")
+EXPERIMENT_LABEL = os.getenv("EXPERIMENT_LABEL", "completa")
 THRESHOLD = int(os.getenv("BATCH_THRESHOLD", 10_000))
 FLUSH_INTERVAL = int(os.getenv("BATCH_FLUSH_INTERVAL", 60))
 OUTPUT_DIR = os.getenv("BATCH_OUTPUT_DIR", "./batches_output")
@@ -24,6 +25,7 @@ OUTPUT_DIR = os.getenv("BATCH_OUTPUT_DIR", "./batches_output")
 BUFFER = deque()
 BUFFER_LOCK = threading.Lock()
 FLUSH_LOCK = threading.Lock()
+STOP_EVENT = threading.Event()
 LAST_FLUSH = time.time()
 LAST_RECEIVED = time.time()
 FILES_CREATED = 0
@@ -58,10 +60,10 @@ def write_batch_to_csv(batch):
     if not batch:
         return
 
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S%f")
     filename = f"{OUTPUT_DIR}/batch_{timestamp}.csv"
 
-    with open(filename, mode="w", newline="", encoding="utf-8") as csvfile:
+    with open(filename + ".tmp", mode="x", newline="", encoding="utf-8") as csvfile:
         fieldnames = [
             "sensor_id",
             "production_line_id",
@@ -70,6 +72,8 @@ def write_batch_to_csv(batch):
             "unit",
             "value",
             "created_at",
+            "created_mono_ns",
+            "clock_id",
             "id",
         ]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
@@ -77,14 +81,15 @@ def write_batch_to_csv(batch):
         for row in batch:
             writer.writerow(row)
 
+    os.replace(filename + ".tmp", filename)
     FILES_CREATED += 1
 
 
 # --------------- FLUSH DO BUFFER ------------------ #
-def flush_buffer():
+def flush_buffer(blocking=False):
     global LAST_FLUSH
 
-    if not FLUSH_LOCK.acquire(blocking=False):
+    if not FLUSH_LOCK.acquire(blocking=blocking):
         return
 
     try:
@@ -94,7 +99,12 @@ def flush_buffer():
             batch = list(BUFFER)
             BUFFER.clear()
 
-        write_batch_to_csv(batch)
+        try:
+            write_batch_to_csv(batch)
+        except Exception:
+            with BUFFER_LOCK:
+                BUFFER.extendleft(reversed(batch))
+            raise
         LAST_FLUSH = time.time()
     finally:
         FLUSH_LOCK.release()
@@ -126,8 +136,7 @@ def start_live_dashboard():
 
 # --------------- THREAD: FLUSH TEMPORAL --------------- #
 def start_flush_timer():
-    while True:
-        time.sleep(1)
+    while not STOP_EVENT.wait(1):
         now = time.time()
         with BUFFER_LOCK:
             has_data = bool(BUFFER)
@@ -143,13 +152,25 @@ def main():
     )
 
     # threading.Thread(target=start_live_dashboard, daemon=True).start()
-    threading.Thread(target=start_flush_timer, daemon=True).start()
+    timer = threading.Thread(target=start_flush_timer, daemon=True)
+    timer.start()
 
-    mqtt_client = MQTTConnection(on_message=on_message)
-    mqtt_client.connect()
+    mqtt_client = MQTTConnection(on_message=on_message, use_background_loop=True)
 
-    while True:
-        time.sleep(1)
+    def handle_shutdown(signum, frame):
+        STOP_EVENT.set()
+
+    signal.signal(signal.SIGTERM, handle_shutdown)
+    signal.signal(signal.SIGINT, handle_shutdown)
+
+    try:
+        mqtt_client.connect()
+        STOP_EVENT.wait()
+    finally:
+        mqtt_client.stop()
+        timer.join()
+        flush_buffer(blocking=True)
+        print("✅ Batch consumer encerrado; buffer gravado.", flush=True)
 
 
 if __name__ == "__main__":

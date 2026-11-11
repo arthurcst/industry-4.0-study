@@ -11,7 +11,7 @@ datasources:
     jsonData:
       version: Flux
       organization: my-org
-      defaultBucket: iot_stream_1x
+      defaultBucket: iot_stream_completa
       tlsSkipVerify: true
     secureJsonData:
       token: my-super-token
@@ -25,6 +25,21 @@ datasources:
     editable: true
     jsonData:
       database: iot_batch
+      sslmode: disable
+      postgresVersion: 1400
+      timescaledb: false
+    secureJsonData:
+      password: grafana
+
+  - name: Confirmacoes-Experimento
+    uid: confirmed-metrics
+    type: postgres
+    access: proxy
+    url: metrics-db:5432
+    user: grafana
+    editable: true
+    jsonData:
+      database: experiment_metrics
       sslmode: disable
       postgresVersion: 1400
       timescaledb: false

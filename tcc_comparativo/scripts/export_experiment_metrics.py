@@ -20,6 +20,7 @@ import glob
 import json
 import re
 import subprocess
+import statistics
 from datetime import datetime, timezone
 
 import psycopg2
@@ -30,7 +31,7 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 project_dir = os.path.dirname(script_dir)
 load_dotenv(os.path.join(project_dir, "docker.env"))
 
-EXPERIMENT_LABEL = os.getenv("EXPERIMENT_LABEL", "1x")
+EXPERIMENT_LABEL = os.getenv("EXPERIMENT_LABEL", "completa")
 PG_TABLE = os.getenv("PG_TABLE", "sensor_data")
 INFLUXDB_BUCKET = os.getenv("INFLUXDB_BUCKET")
 INFLUXDB_TOKEN = os.getenv("INFLUXDB_TOKEN")
@@ -65,7 +66,7 @@ PG_PORT = os.getenv(
 )
 _influx_url = os.getenv("INFLUXDB_URL", "http://localhost:8086")
 if not os.path.exists("/.dockerenv"):
-    _influx_url = _influx_url.replace("http://influxdb:", "http://localhost:")
+    _influx_url = _influx_url.replace("http://influxdb:", "http://127.0.0.1:")
 INFLUXDB_URL = _influx_url
 METRICS_DIR = resolve_metrics_dir()
 os.makedirs(METRICS_DIR, exist_ok=True)
@@ -84,30 +85,12 @@ def export_postgres_metrics() -> dict:
     cursor.execute(f"SELECT COUNT(*) FROM {PG_TABLE}")
     total = cursor.fetchone()[0]
 
-    cursor.execute(
-        f"""
-        SELECT
-            AVG(ingested_at - created_at::bigint),
-            MIN(ingested_at - created_at::bigint),
-            MAX(ingested_at - created_at::bigint),
-            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ingested_at - created_at::bigint),
-            PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY ingested_at - created_at::bigint)
-        FROM {PG_TABLE}
-        WHERE ingested_at IS NOT NULL AND created_at IS NOT NULL
-        """
-    )
-    row = cursor.fetchone()
     cursor.close()
     conn.close()
 
     return {
         "table": PG_TABLE,
         "total_records": total,
-        "latency_avg_ms": round(float(row[0]), 2) if row[0] is not None else None,
-        "latency_min_ms": row[1],
-        "latency_max_ms": row[2],
-        "latency_p50_ms": round(float(row[3]), 2) if row[3] is not None else None,
-        "latency_p95_ms": round(float(row[4]), 2) if row[4] is not None else None,
     }
 
 
@@ -134,59 +117,10 @@ from(bucket: "{INFLUXDB_BUCKET}")
             for record in table.records:
                 total += record.get_value() or 0
 
-        # Fix 2 (pivot rowKey): inclui _measurement + sensor_id para evitar colisão
-        # quando múltiplas métricas chegam no mesmo _time.
-        # Fix 3 (percentis): exporta p50 e p95 além da média.
-        # Fix 4 (exceção silenciosa): loga o erro real em vez de engolir.
-        latency_result = {
-            "latency_avg_ms": None,
-            "latency_p50_ms": None,
-            "latency_p95_ms": None,
-            "latency_min_ms": None,
-            "latency_max_ms": None,
-        }
-        # Calcula cada estatística via Flux para evitar trazer milhões de pontos ao Python.
-        # O pivot usa _time + _measurement + sensor_id como chave única por ponto.
-        # Após o map, a coluna de interesse é "latency_ms" (não "_value").
-        _lat_base = f'''
-from(bucket: "{INFLUXDB_BUCKET}")
-  |> range(start: -30d)
-  |> filter(fn: (r) => r._field == "ingested_at" or r._field == "created_at")
-  |> pivot(
-      rowKey: ["_time", "_measurement", "sensor_id"],
-      columnKey: ["_field"],
-      valueColumn: "_value"
-     )
-  |> filter(fn: (r) => exists r.ingested_at and exists r.created_at)
-  |> map(fn: (r) => ({{latency_ms: float(v: r.ingested_at) - float(v: r.created_at)}}))
-'''
-        _lat_stats = {
-            "latency_avg_ms": f'{_lat_base} |> mean(column: "latency_ms")',
-            "latency_min_ms": f'{_lat_base} |> min(column: "latency_ms")',
-            "latency_max_ms": f'{_lat_base} |> max(column: "latency_ms")',
-            "latency_p50_ms": f'{_lat_base} |> quantile(q: 0.50, column: "latency_ms")',
-            "latency_p95_ms": f'{_lat_base} |> quantile(q: 0.95, column: "latency_ms")',
-        }
-        try:
-            for key, q in _lat_stats.items():
-                for table in client.query_api().query(q, org=INFLUXDB_ORG):
-                    for record in table.records:
-                        v = record.values.get("latency_ms")
-                        if v is not None:
-                            latency_result[key] = round(float(v), 2)
-            if latency_result["latency_avg_ms"] is not None:
-                print(f"   InfluxDB latência: avg={latency_result['latency_avg_ms']}ms "
-                      f"p50={latency_result['latency_p50_ms']}ms "
-                      f"p95={latency_result['latency_p95_ms']}ms")
-        except Exception as exc:
-            latency_result["latency_error"] = str(exc)
-            print(f"   ⚠️ InfluxDB latência query falhou: {exc}")
-
         client.close()
         return {
             "bucket": INFLUXDB_BUCKET,
             "total_records": total,
-            **latency_result,
         }
     except Exception as exc:
         client.close()
@@ -357,6 +291,34 @@ def _make_hist_from_values(values, n_bins, v_min, v_max):
     return edges, counts, clipped
 
 
+def confirmed_latency_metrics(approach):
+    path = os.path.join(METRICS_DIR, f"latency_{approach}.csv")
+    with open(path, newline="", encoding="utf-8") as source:
+        values = []
+        for row in csv.reader(source):
+            if len(row) != 6:
+                raise ValueError(f"Confirmação monotônica inválida em {path}")
+            values.append((int(row[4]) - int(row[3])) / 1_000_000)
+    if not values:
+        raise ValueError(f"Nenhuma confirmação registrada em {path}")
+    ordered = sorted(values)
+    def percentile(q):
+        position = (len(ordered) - 1) * q
+        lower = int(position)
+        upper = min(lower + 1, len(ordered) - 1)
+        return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
+    return values, {
+        "latency_count": len(values),
+        "latency_avg_ms": round(statistics.mean(values), 2),
+        "latency_stddev_ms": round(statistics.pstdev(values), 2),
+        "latency_min_ms": ordered[0],
+        "latency_max_ms": ordered[-1],
+        "latency_p50_ms": round(percentile(0.5), 2),
+        "latency_p95_ms": round(percentile(0.95), 2),
+        "latency_negative_count": sum(value < 0 for value in values),
+    }
+
+
 def export_latency_histograms() -> dict:
     """Exporta histogramas pré-computados de latência batch (PG) e stream (InfluxDB)."""
     result = {"batch": None, "stream": None}
@@ -490,6 +452,8 @@ def main():
 
     summary = {
         "experiment": EXPERIMENT_LABEL,
+        "latency_clock": "monotonic_ns",
+        "experiment_seed": os.getenv("EXPERIMENT_SEED"),
         "experiment_run_dir": EXPERIMENT_RUN_DIR or None,
         "exported_at": datetime.now(timezone.utc).isoformat(),
         "postgres": {},
@@ -575,7 +539,25 @@ def main():
         print(f"   Batch throughput: {len(throughput_entries)} lotes → {throughput_csv}")
 
     try:
-        hist_data = export_latency_histograms()
+        hist_data = {}
+        for approach, storage in (("batch", "postgres"), ("stream", "influxdb")):
+            for key in list(summary[storage]):
+                if key.startswith("latency_"):
+                    del summary[storage][key]
+            try:
+                values, stats = confirmed_latency_metrics(approach)
+                summary[storage].update(stats)
+                divisor = 1000 if approach == "batch" else 1
+                unit = "s" if approach == "batch" else "ms"
+                bins, lower, upper = (BATCH_HIST_BINS, BATCH_HIST_MIN_S, BATCH_HIST_MAX_S) if approach == "batch" else (STREAM_HIST_BINS, STREAM_HIST_MIN_MS, STREAM_HIST_MAX_MS)
+                edges, counts, clipped = _make_hist_from_values([v / divisor for v in values], bins, lower, upper)
+                hist_data[approach] = {f"bin_edges_{unit}": edges, "counts": counts, "n_bins": bins, f"range_{unit}": [lower, upper], "clipped_count": clipped}
+                total = summary[storage].get("total_records")
+                if total is not None and total != len(values):
+                    summary[storage]["latency_warning"] = f"{len(values)} confirmações registradas para {total} registros no banco"
+            except (OSError, ValueError) as exc:
+                summary[storage]["latency_error"] = str(exc)
+                hist_data[approach] = {"error": str(exc)}
         summary["latency_histograms"] = hist_data
         hist_path = os.path.join(METRICS_DIR, f"latency_hist_{EXPERIMENT_LABEL}.json")
         with open(hist_path, "w", encoding="utf-8") as f:
@@ -593,6 +575,7 @@ def main():
 
     flat_rows = [
         ("experiment", EXPERIMENT_LABEL),
+        ("experiment_seed", summary["experiment_seed"] or ""),
         ("experiment_run_dir", EXPERIMENT_RUN_DIR or ""),
         ("exported_at", summary["exported_at"]),
         ("pg_table", summary["postgres"].get("table", "")),

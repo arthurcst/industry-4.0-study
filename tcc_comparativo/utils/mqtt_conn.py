@@ -21,6 +21,11 @@ def on_disconnect(client, userdata, rc):
     print(f"🔌 Disconnected with result code {rc}")
 
 
+def on_subscribe(client, userdata, mid, granted_qos):
+    if granted_qos and all(qos != 128 for qos in granted_qos):
+        print("MQTT_SUBSCRIBED", flush=True)
+
+
 class MQTTConnection:
     def __init__(
         self,
@@ -43,6 +48,7 @@ class MQTTConnection:
 
         self.client = mqtt_client.Client(client_id=self.client_id, clean_session=False)
         self.client.on_connect = on_connect
+        self.client.on_subscribe = on_subscribe
         self.client.on_message = on_message
         self.client.on_disconnect = on_disconnect
         self.client.enable_logger()
@@ -72,10 +78,10 @@ class MQTTConnection:
 
     def stop(self):
         try:
-            self.client.loop_stop()
+            self.client.disconnect()
         except Exception:
             pass
         try:
-            self.client.disconnect()
+            self.client.loop_stop()
         except Exception:
             pass

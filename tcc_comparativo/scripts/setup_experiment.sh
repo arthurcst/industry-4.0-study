@@ -24,5 +24,4 @@ fi
 echo "⚠️  Setup via Python local falhou; tentando via container stream-consumer..."
 exec docker compose run --rm --no-deps \
   -v "$ROOT/scripts/setup_experiment.py:/app/scripts/setup_experiment.py:ro" \
-  --env-file "$ROOT/docker.env" \
   stream-consumer python -I /app/scripts/setup_experiment.py "$@"

@@ -1408,12 +1408,37 @@ SENSORS_01_DISASTER = [
 ]
 
 
+BASE_ASSET_COUNT = 25
+SCENARIO_ASSET_COUNTS = (25, 50, 100)
+
+
 def get_sensors_by_location(
-    sensors: List[dict] = SENSORS_01, rate_modifier: int = 1
+    sensors: List[dict] = SENSORS_01, active_asset_count: int = 100
 ) -> dict:
-    for sensor in sensors:
-        sensor["frequency"] = sensor["frequency"] * (1 / rate_modifier)
+    if active_asset_count not in SCENARIO_ASSET_COUNTS:
+        raise ValueError("ACTIVE_ASSET_COUNT deve ser 25, 50 ou 100")
 
-    grouped_sensors = _.group_by(sensors, "location")
+    locations = list(dict.fromkeys(sensor["location"] for sensor in sensors))
+    # shortcut: o sufixo final identifica a réplica original; usar metadados explícitos se a topologia mudar.
+    base_locations = [
+        location
+        for replica in ("01", "02", "03")
+        for location in locations
+        if location.rsplit("_", 1)[1] == replica
+    ][:BASE_ASSET_COUNT]
+    base_sensors = [sensor for sensor in sensors if sensor["location"] in base_locations]
 
-    return grouped_sensors
+    replicated_sensors = []
+    for plant_replica in range(active_asset_count // BASE_ASSET_COUNT):
+        suffix = f"_P{plant_replica + 1:02d}"
+        for sensor in base_sensors:
+            replicated_sensors.append(
+                {
+                    **sensor,
+                    "sensor_id": f"{sensor['sensor_id']}{suffix}",
+                    "production_line_id": f"{sensor['production_line_id']}{suffix}",
+                    "location": f"{sensor['location']}{suffix}",
+                }
+            )
+
+    return _.group_by(replicated_sensors, "location")

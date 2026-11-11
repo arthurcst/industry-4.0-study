@@ -24,7 +24,7 @@ else
   METRICS_DIR="$ROOT/metrics"
 fi
 
-LABEL="${EXPERIMENT_LABEL:-1x}"
+LABEL="${EXPERIMENT_LABEL:-completa}"
 EXECUTION_TIME="${EXECUTION_TIME_SECONDS:-3600}"
 DURATION="${COLLECT_DURATION_SECONDS:-$((EXECUTION_TIME + EXTRA_SECONDS))}"
 OUT_FILE="$METRICS_DIR/docker_stats_${LABEL}.csv"
@@ -59,10 +59,17 @@ while true; do
   fi
 
   if ((${#containers[@]} > 0)); then
-    docker stats --no-stream --format "{{.Container}},{{.Name}},{{.CPUPerc}},{{.MemUsage}},{{.MemPerc}},{{.NetIO}},{{.BlockIO}},{{.PIDs}}" "${containers[@]}" \
-      | while IFS= read -r line; do
+    for attempt in 1 2 3; do
+      if sample="$(docker stats --no-stream --format "{{.Container}},{{.Name}},{{.CPUPerc}},{{.MemUsage}},{{.MemPerc}},{{.NetIO}},{{.BlockIO}},{{.PIDs}}" "${containers[@]}")"; then
+        while IFS= read -r line; do
           [[ -n "$line" ]] && echo "$timestamp,$LABEL,$line" >> "$OUT_FILE"
-        done
+        done <<< "$sample"
+        break
+      fi
+      echo "⚠️ Falha ao coletar recursos (tentativa $attempt/3)" >&2
+      if (( attempt == 3 )); then exit 1; fi
+      sleep 2
+    done
   fi
 
   sleep "$INTERVAL"

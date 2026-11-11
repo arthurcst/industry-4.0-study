@@ -1,6 +1,6 @@
 services:
     mosquitto:
-        image: eclipse-mosquitto:2.0
+        image: eclipse-mosquitto:2.0@sha256:09b62ff32c2e7b64d4b431b9a89236073289b68db273de2b089edeb9b0d92b5c
         container_name: mosquitto
         restart: always
         ports:
@@ -12,7 +12,7 @@ services:
             - mosquitto_log:/mosquitto/log
 
     postgres:
-        image: postgres:14
+        image: postgres:14@sha256:6dcb6a82dc99cd90b7a81f965b0b08c1ab074095d79634ef80e189d262895d21
         container_name: postgres
         restart: always
         environment:
@@ -25,7 +25,7 @@ services:
             - postgres_data:/var/lib/postgresql/data
 
     influxdb:
-        image: influxdb:2.7
+        image: influxdb:2.7@sha256:b8d940ca9376f85118260f5b6bd236b8a00b1749c3350c5578d4cde8e27f31f2
         container_name: influxdb
         restart: always
         ports:
@@ -35,20 +35,21 @@ services:
             - DOCKER_INFLUXDB_INIT_USERNAME=admin
             - DOCKER_INFLUXDB_INIT_PASSWORD=admin123
             - DOCKER_INFLUXDB_INIT_ORG=my-org
-            - DOCKER_INFLUXDB_INIT_BUCKET=${INFLUXDB_BUCKET:-iot_stream_1x}
+            - DOCKER_INFLUXDB_INIT_BUCKET=${INFLUXDB_BUCKET:-iot_stream_completa}
             - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=my-super-token
         volumes:
             - influxdb_data:/var/lib/influxdb2
 
     grafana:
-        image: grafana/grafana:10.4.5
+        image: grafana/grafana:10.4.5@sha256:c2f484c66179ddd2acae789ecaf8f283359a5ebc597e28253c794a229eb2d3f6
         container_name: grafana
         restart: always
         depends_on:
             - postgres
             - influxdb
+            - metrics-db
         ports:
-            - "3000:3000"
+            - "127.0.0.1:5005:3000"
         environment:
             - GF_SECURITY_ADMIN_USER=admin
             - GF_SECURITY_ADMIN_PASSWORD=admin
@@ -58,7 +59,32 @@ services:
             - ./grafana/provisioning:/etc/grafana/provisioning
             - ./grafana/dashboards:/var/lib/grafana/dashboards
 
+    metrics-prepare:
+        image: postgres:14@sha256:6dcb6a82dc99cd90b7a81f965b0b08c1ab074095d79634ef80e189d262895d21
+        entrypoint: ["sh", "-c", "touch /metrics/latency_batch.csv /metrics/latency_stream.csv"]
+        tmpfs:
+            - /var/lib/postgresql/data
+        volumes:
+            - ${METRICS_HOST:-./metrics}:/metrics
+
+    metrics-db:
+        image: postgres:14@sha256:6dcb6a82dc99cd90b7a81f965b0b08c1ab074095d79634ef80e189d262895d21
+        depends_on:
+            metrics-prepare:
+                condition: service_completed_successfully
+        command: ["postgres", "-c", "experiment.scenario=${EXPERIMENT_LABEL:-completa}"]
+        environment:
+            POSTGRES_USER: grafana
+            POSTGRES_PASSWORD: grafana
+            POSTGRES_DB: experiment_metrics
+        tmpfs:
+            - /var/lib/postgresql/data
+        volumes:
+            - ${METRICS_HOST:-./metrics}:/metrics:ro
+            - ./grafana/metrics/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+
     batch-consumer:
+        stop_grace_period: 60s
         build:
             context: .
             dockerfile: Dockerfile.batch
@@ -66,8 +92,9 @@ services:
         environment:
             - PYTHONUNBUFFERED=1
         volumes:
-            - ${BATCH_OUTPUT_HOST:-./batches_output_1x}:/app/batches_output
-            - ${BATCH_PROCESSED_HOST:-./batches_processed_1x}:/app/batches_processed
+            - ${BATCH_OUTPUT_HOST:-./batches_output_completa}:/app/batches_output
+            - ${BATCH_PROCESSED_HOST:-./batches_processed_completa}:/app/batches_processed
+            - ${METRICS_HOST:-./metrics}:/app/metrics
         env_file:
             - docker.env
         depends_on:
@@ -75,12 +102,15 @@ services:
             - postgres
 
     stream-consumer:
+        stop_grace_period: 60s
         build:
             context: .
             dockerfile: Dockerfile.stream
         container_name: stream_consumer
         environment:
             - PYTHONUNBUFFERED=1
+        volumes:
+            - ${METRICS_HOST:-./metrics}:/app/metrics
         env_file:
             - docker.env
         depends_on:
@@ -104,4 +134,5 @@ volumes:
     influxdb_data:
     grafana_data:
     mosquitto_data:
+        name: ${MQTT_DATA_VOLUME:-tcc_comparativo_mosquitto_data}
     mosquitto_log:

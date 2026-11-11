@@ -1,0 +1,4 @@
+services:
+  metrics-db:
+    volumes:
+      - ../fixtures:/metrics:ro

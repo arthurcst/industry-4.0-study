@@ -1,150 +1,20 @@
-# Grafana — painéis TCC
+# Painéis Grafana do TCC
 
-## Onde encontrar no Grafana
+O Grafana é disponibilizado em http://localhost:5005. O dashboard provisionado fica na pasta TCC, com o nome **TCC — Stream vs Batch**.
 
-1. Abra http://localhost:3000 (`admin` / `admin`)
-2. Menu lateral → **Dashboards** (ícone de quadrados)
-3. Na lista à esquerda, abra a pasta **TCC**
-4. Clique em **TCC — Stream vs Batch**
+Os seletores de bucket e tabela representam os cenários reduzido, intermediário e completo. Os painéis exibem somente os arquivos de confirmação da execução ativa: ao selecionar outro cenário, não há dados. Para consultar outra execução, é necessário montar os arquivos dela na fonte auxiliar e reiniciá-la com o cenário correspondente.
 
-Ou use a busca no topo: digite `TCC`.
+| Painel | Significado |
+|---|---|
+| Confirmações por segundo, batch ou stream | Quantidade de mensagens com confirmação registrada em cada segundo, incluindo segundos sem confirmação entre a primeira e a última observação no intervalo selecionado. |
+| Latência até a confirmação, batch ou stream | Média por segundo do intervalo entre a criação e a confirmação recebida pelo cliente, em milissegundos. |
+| Stream, média nos últimos 2 min | Confirmações dos últimos 120 segundos divididas por 120, incluindo segundos sem confirmação. No início da execução, parte da janela pode anteceder a geração. |
+| Batch, média por minuto | Confirmações em cada minuto divididas por 60. Minutos parcialmente incluídos no filtro também são divididos por 60. |
 
-## Se não aparecer
+Uma confirmação é atribuída ao instante em que o cliente recebe a resposta de escrita, compartilhado por todos os registros daquela operação. Ausência de confirmações não identifica, por si só, a causa: podem ocorrer pausas normais de lote, falhas ou atraso na coleta.
 
-Recrie o Grafana para carregar os arquivos de provisioning:
+O serviço auxiliar `metrics-db` usa `file_fdw` para ler os CSVs `latency_batch.csv` e `latency_stream.csv` da execução ativa. Os CSVs são persistidos no diretório da execução e montados em modo somente de leitura no banco auxiliar. O banco auxiliar é temporário e não contém cópia durável dos dados. `metrics-prepare` cria os arquivos vazios quando ainda não existem, sem apagar o conteúdo existente.
 
-```bash
-cd tcc_comparativo
-docker compose up -d --force-recreate grafana
-```
+O Grafana consulta os arquivos a cada 30 segundos. Essas leituras e o banco auxiliar consomem recursos compartilhados com o experimento, portanto o monitoramento pode afetar as medições. Os CSVs e os resumos por execução devem ser preservados como fonte de análise do trabalho.
 
-**Import manual:**
-
-1. **Dashboards** → **New** → **Import**
-2. **Upload** → `grafana/dashboards/tcc-pipelines.json`
-3. Selecione datasources: **InfluxDB-Stream** e **PostgreSQL-Batch**
-4. **Import**
-
-Datasources provisionadas: **Connections → Data sources** → `InfluxDB-Stream`, `PostgreSQL-Batch`.
-
----
-
-## Variáveis do dashboard
-
-| Variável | Opções |
-|----------|--------|
-| **Bucket Influx** | `iot_stream_1x`, `2x`, `4x` |
-| **Tabela PG** | `sensor_data_1x`, `2x`, `4x` |
-
-Alinhe com o perfil do experimento ativo.
-
----
-
-## Painéis incluídos
-
-### Stream (InfluxDB)
-
-| Painel | Tipo | Métrica |
-|--------|------|---------|
-| Registros por segundo | Time series | Contagem de `value` / 1s |
-| Delay médio | Time series | `ingested_at − created_at` (média / 10s) |
-| Throughput médio | Stat | Média de msg/s nos últimos 2 min |
-
-**Flux — registros/s:**
-
-```flux
-from(bucket: "iot_stream_1x")
-  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
-  |> filter(fn: (r) => r._field == "value")
-  |> aggregateWindow(every: 1s, fn: count, createEmpty: true)
-```
-
-**Flux — delay médio:**
-
-```flux
-from(bucket: "iot_stream_1x")
-  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
-  |> filter(fn: (r) => r._field == "ingested_at" or r._field == "created_at")
-  |> pivot(rowKey: ["_time", "sensor_id", "location", "production_line_id", "metric"], columnKey: ["_field"], valueColumn: "_value")
-  |> map(fn: (r) => ({ _time: r._time, _value: float(v: r.ingested_at) - float(v: r.created_at) }))
-  |> aggregateWindow(every: 10s, fn: mean, createEmpty: false)
-```
-
-### Batch (PostgreSQL)
-
-| Painel | Tipo | Métrica |
-|--------|------|---------|
-| Registros por segundo | Time series | `COUNT(*)` por segundo em `created_at` |
-| Delay médio | Time series | `AVG(ingested_at - created_at)` por segundo |
-| Throughput carga PG | Time series | `COUNT(*)` por segundo em `ingested_at` |
-
-**SQL — registros/s (geração MQTT):**
-
-```sql
-SELECT
-  to_timestamp(created_at / 1000.0) AS "time",
-  COUNT(*)::double precision AS "records_per_second"
-FROM sensor_data_1x
-WHERE created_at >= (EXTRACT(EPOCH FROM $__timeFrom()::timestamptz) * 1000)::bigint
-  AND created_at < (EXTRACT(EPOCH FROM $__timeTo()::timestamptz) * 1000)::bigint
-GROUP BY 1
-ORDER BY 1
-```
-
-**SQL — delay médio:**
-
-```sql
-SELECT
-  to_timestamp(created_at / 1000.0) AS "time",
-  AVG(ingested_at - created_at::bigint)::double precision AS "latency_ms"
-FROM sensor_data_1x
-WHERE created_at >= (EXTRACT(EPOCH FROM $__timeFrom()::timestamptz) * 1000)::bigint
-  AND created_at < (EXTRACT(EPOCH FROM $__timeTo()::timestamptz) * 1000)::bigint
-GROUP BY 1
-ORDER BY 1
-```
-
-**SQL — throughput (carga no Postgres após cron):**
-
-```sql
-SELECT
-  to_timestamp(ingested_at / 1000.0) AS "time",
-  COUNT(*)::double precision AS "throughput"
-FROM sensor_data_1x
-WHERE ingested_at >= (EXTRACT(EPOCH FROM $__timeFrom()::timestamptz) * 1000)::bigint
-  AND ingested_at < (EXTRACT(EPOCH FROM $__timeTo()::timestamptz) * 1000)::bigint
-GROUP BY 1
-ORDER BY 1
-```
-
----
-
-## Recriar provisioning
-
-Se o Grafana entra em **restart loop** com:
-
-```text
-Datasource provisioning error: data source not found
-```
-
-isso costuma ser volume `grafana_data` incompatível após upgrade para **Grafana 13+** (`grafana:latest`). O projeto usa **Grafana 10.4.5** fixo no `docker-compose.yml`.
-
-**Reset automático:**
-
-```bash
-bash scripts/reset_grafana.sh
-```
-
-**Manual:**
-
-```bash
-docker compose rm -sf grafana
-docker volume rm tcc_comparativo_grafana_data
-docker compose up -d grafana
-```
-
-Ou só recriar o container (se o volume já estiver limpo):
-
-```bash
-docker compose up -d --force-recreate grafana
-```
+Não utilize os painéis antigos baseados em `ingested_at - created_at` como latência até a confirmação. Contagens de confirmação também não são equivalentes a identificação de mensagens perdidas: a análise de perdas exige conferir os identificadores produzidos, recebidos e confirmados.

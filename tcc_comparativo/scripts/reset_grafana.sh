@@ -21,4 +21,4 @@ fi
 echo "🚀 Subindo Grafana (provisionamento limpo)..."
 docker compose up -d grafana
 
-echo "✅ Pronto. Acesse http://localhost:3000 (admin/admin)"
+echo "✅ Pronto. Acesse http://localhost:5005 (admin/admin)"

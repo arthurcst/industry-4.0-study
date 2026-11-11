@@ -14,7 +14,7 @@
       "type": "row"
     },
     {
-      "datasource": { "type": "influxdb", "uid": "influx-stream" },
+      "datasource": { "type": "postgres", "uid": "confirmed-metrics" },
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
@@ -37,16 +37,19 @@
       },
       "targets": [
         {
-          "datasource": { "type": "influxdb", "uid": "influx-stream" },
-          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._field == \"value\")\n  |> aggregateWindow(every: 1s, fn: count, createEmpty: true)\n  |> yield(name: \"records_per_second\")",
+          "datasource": { "type": "postgres", "uid": "confirmed-metrics" },
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH counts AS (SELECT date_trunc('second', to_timestamp(confirmed_at_ms / 1000.0)) AS t, count(*)::double precision AS n FROM confirmed_stream WHERE '${bucket}' = 'iot_stream_' || current_setting('experiment.scenario') AND to_timestamp(confirmed_at_ms / 1000.0) >= $__timeFrom() AND to_timestamp(confirmed_at_ms / 1000.0) < $__timeTo() GROUP BY 1), seconds AS (SELECT generate_series(min(t), max(t), interval '1 second') AS t FROM counts) SELECT seconds.t AS time, coalesce(counts.n, 0) AS \"registros/s\" FROM seconds LEFT JOIN counts USING (t) ORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Stream — registros por segundo",
+      "description": "Mensagens com confirmação registrada por segundo. Os vazios entre a primeira e a última confirmação são zero; seleção diferente da execução ativa não retorna dados.",
+      "title": "Stream — confirmações por segundo (registros/s)",
       "type": "timeseries"
     },
     {
-      "datasource": { "type": "influxdb", "uid": "influx-stream" },
+      "datasource": { "type": "postgres", "uid": "confirmed-metrics" },
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
@@ -69,28 +72,23 @@
       },
       "targets": [
         {
-          "datasource": { "type": "influxdb", "uid": "influx-stream" },
-          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._field == \"ingested_at\" or r._field == \"created_at\")\n  |> pivot(rowKey: [\"_time\", \"sensor_id\", \"location\", \"production_line_id\", \"metric\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> map(fn: (r) => ({ _time: r._time, _value: float(v: r.ingested_at) - float(v: r.created_at) }))\n  |> aggregateWindow(every: 10s, fn: mean, createEmpty: false)\n  |> yield(name: \"latency_ms\")",
+          "datasource": { "type": "postgres", "uid": "confirmed-metrics" },
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT date_trunc('second', to_timestamp(confirmed_at_ms / 1000.0)) AS time, avg((confirmed_mono_ns - created_mono_ns) / 1000000.0)::double precision AS latency_ms FROM confirmed_stream WHERE '${bucket}' = 'iot_stream_' || current_setting('experiment.scenario') AND to_timestamp(confirmed_at_ms / 1000.0) >= $__timeFrom() AND to_timestamp(confirmed_at_ms / 1000.0) < $__timeTo() GROUP BY 1 ORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Stream — delay médio (ingested − created)",
+      "description": "Média por segundo do intervalo até a confirmação recebida pelo consumidor. Usa apenas o arquivo da execução ativa.",
+      "title": "Stream — latência até a confirmação (ms)",
       "type": "timeseries"
     },
     {
-      "datasource": { "type": "influxdb", "uid": "influx-stream" },
+      "datasource": { "type": "postgres", "uid": "confirmed-metrics" },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
+          "color": { "mode": "fixed", "fixedColor": "blue" },
           "decimals": 1,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "red", "value": null },
-              { "color": "yellow", "value": 50 },
-              { "color": "green", "value": 200 }
-            ]
-          },
           "unit": "cps"
         },
         "overrides": []
@@ -107,12 +105,15 @@
       },
       "targets": [
         {
-          "datasource": { "type": "influxdb", "uid": "influx-stream" },
-          "query": "from(bucket: \"${bucket}\")\n  |> range(start: -2m)\n  |> filter(fn: (r) => r._field == \"value\")\n  |> aggregateWindow(every: 1s, fn: count, createEmpty: false)\n  |> mean(column: \"_value\")\n  |> yield(name: \"throughput_avg\")",
+          "datasource": { "type": "postgres", "uid": "confirmed-metrics" },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT count(*)::double precision / 120.0 AS \"registros/s\" FROM confirmed_stream WHERE confirmed_at_ms >= extract(epoch FROM (now() - interval '2 minutes')) * 1000 AND confirmed_at_ms < extract(epoch FROM now()) * 1000 HAVING '${bucket}' = 'iot_stream_' || current_setting('experiment.scenario')",
           "refId": "A"
         }
       ],
-      "title": "Stream — throughput médio (últimos 2 min)",
+      "description": "Total de confirmações nos últimos 120 segundos dividido por 120, incluindo segundos sem confirmação. No início da execução, parte da janela pode anteceder a geração.",
+      "title": "Stream — throughput médio (últimos 2 min, registros/s)",
       "type": "stat"
     },
     {
@@ -123,7 +124,7 @@
       "type": "row"
     },
     {
-      "datasource": { "type": "postgres", "uid": "postgres-batch" },
+      "datasource": { "type": "postgres", "uid": "confirmed-metrics" },
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
@@ -146,18 +147,19 @@
       },
       "targets": [
         {
-          "datasource": { "type": "postgres", "uid": "postgres-batch" },
+          "datasource": { "type": "postgres", "uid": "confirmed-metrics" },
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT\n  to_timestamp(created_at / 1000.0) AS \"time\",\n  COUNT(*)::double precision AS \"records_per_second\"\nFROM ${pg_table}\nWHERE created_at >= (EXTRACT(EPOCH FROM $__timeFrom()::timestamptz) * 1000)::bigint\n  AND created_at < (EXTRACT(EPOCH FROM $__timeTo()::timestamptz) * 1000)::bigint\nGROUP BY 1\nORDER BY 1",
+          "rawSql": "WITH counts AS (SELECT date_trunc('second', to_timestamp(confirmed_at_ms / 1000.0)) AS t, count(*)::double precision AS n FROM confirmed_batch WHERE '${pg_table}' = 'sensor_data_' || current_setting('experiment.scenario') AND to_timestamp(confirmed_at_ms / 1000.0) >= $__timeFrom() AND to_timestamp(confirmed_at_ms / 1000.0) < $__timeTo() GROUP BY 1), seconds AS (SELECT generate_series(min(t), max(t), interval '1 second') AS t FROM counts) SELECT seconds.t AS time, coalesce(counts.n, 0) AS \"registros/s\" FROM seconds LEFT JOIN counts USING (t) ORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Batch — registros por segundo (created_at)",
+      "description": "Mensagens com confirmação registrada por segundo. Os vazios entre a primeira e a última confirmação são zero; seleção diferente da execução ativa não retorna dados.",
+      "title": "Batch — confirmações por segundo (registros/s)",
       "type": "timeseries"
     },
     {
-      "datasource": { "type": "postgres", "uid": "postgres-batch" },
+      "datasource": { "type": "postgres", "uid": "confirmed-metrics" },
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
@@ -180,18 +182,19 @@
       },
       "targets": [
         {
-          "datasource": { "type": "postgres", "uid": "postgres-batch" },
+          "datasource": { "type": "postgres", "uid": "confirmed-metrics" },
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT\n  to_timestamp(created_at / 1000.0) AS \"time\",\n  AVG(ingested_at - created_at::bigint)::double precision AS \"latency_ms\"\nFROM ${pg_table}\nWHERE created_at >= (EXTRACT(EPOCH FROM $__timeFrom()::timestamptz) * 1000)::bigint\n  AND created_at < (EXTRACT(EPOCH FROM $__timeTo()::timestamptz) * 1000)::bigint\nGROUP BY 1\nORDER BY 1",
+          "rawSql": "SELECT date_trunc('second', to_timestamp(confirmed_at_ms / 1000.0)) AS time, avg((confirmed_mono_ns - created_mono_ns) / 1000000.0)::double precision AS latency_ms FROM confirmed_batch WHERE '${pg_table}' = 'sensor_data_' || current_setting('experiment.scenario') AND to_timestamp(confirmed_at_ms / 1000.0) >= $__timeFrom() AND to_timestamp(confirmed_at_ms / 1000.0) < $__timeTo() GROUP BY 1 ORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Batch — delay médio (ingested − created)",
+      "description": "Média por segundo do intervalo até a confirmação recebida pelo consumidor. Usa apenas o arquivo da execução ativa.",
+      "title": "Batch — latência até a confirmação (ms)",
       "type": "timeseries"
     },
     {
-      "datasource": { "type": "postgres", "uid": "postgres-batch" },
+      "datasource": { "type": "postgres", "uid": "confirmed-metrics" },
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
@@ -214,50 +217,51 @@
       },
       "targets": [
         {
-          "datasource": { "type": "postgres", "uid": "postgres-batch" },
+          "datasource": { "type": "postgres", "uid": "confirmed-metrics" },
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT\n  to_timestamp(ingested_at / 1000.0) AS \"time\",\n  COUNT(*)::double precision AS \"throughput\"\nFROM ${pg_table}\nWHERE ingested_at >= (EXTRACT(EPOCH FROM $__timeFrom()::timestamptz) * 1000)::bigint\n  AND ingested_at < (EXTRACT(EPOCH FROM $__timeTo()::timestamptz) * 1000)::bigint\nGROUP BY 1\nORDER BY 1",
+          "rawSql": "WITH counts AS (SELECT date_trunc('minute', to_timestamp(confirmed_at_ms / 1000.0)) AS t, count(*)::double precision / 60.0 AS n FROM confirmed_batch WHERE '${pg_table}' = 'sensor_data_' || current_setting('experiment.scenario') AND to_timestamp(confirmed_at_ms / 1000.0) >= $__timeFrom() AND to_timestamp(confirmed_at_ms / 1000.0) < $__timeTo() GROUP BY 1), minutes AS (SELECT generate_series(min(t), max(t), interval '1 minute') AS t FROM counts) SELECT minutes.t AS time, coalesce(counts.n, 0) AS \"registros/s\" FROM minutes LEFT JOIN counts USING (t) ORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Batch — throughput carga no Postgres (ingested_at)",
+      "description": "Confirmações por minuto divididas por 60. Minutos parcialmente incluídos no filtro de tempo também são divididos por 60.",
+      "title": "Batch — throughput médio por minuto (registros/s)",
       "type": "timeseries"
     }
   ],
-  "refresh": "5s",
+  "refresh": "30s",
   "schemaVersion": 39,
   "tags": ["tcc", "iot", "stream", "batch"],
   "templating": {
     "list": [
       {
-        "current": { "selected": true, "text": "iot_stream_1x", "value": "iot_stream_1x" },
+        "current": { "selected": true, "text": "iot_stream_completa", "value": "iot_stream_completa" },
         "hide": 0,
         "includeAll": false,
         "label": "Bucket Influx",
         "multi": false,
         "name": "bucket",
         "options": [
-          { "selected": true, "text": "iot_stream_1x", "value": "iot_stream_1x" },
-          { "selected": false, "text": "iot_stream_2x", "value": "iot_stream_2x" },
-          { "selected": false, "text": "iot_stream_4x", "value": "iot_stream_4x" }
+          { "selected": false, "text": "iot_stream_reduzida", "value": "iot_stream_reduzida" },
+          { "selected": false, "text": "iot_stream_intermediaria", "value": "iot_stream_intermediaria" },
+          { "selected": true, "text": "iot_stream_completa", "value": "iot_stream_completa" }
         ],
-        "query": "iot_stream_1x,iot_stream_2x,iot_stream_4x",
+        "query": "iot_stream_reduzida,iot_stream_intermediaria,iot_stream_completa",
         "type": "custom"
       },
       {
-        "current": { "selected": true, "text": "sensor_data_1x", "value": "sensor_data_1x" },
+        "current": { "selected": true, "text": "sensor_data_completa", "value": "sensor_data_completa" },
         "hide": 0,
         "includeAll": false,
         "label": "Tabela PG",
         "multi": false,
         "name": "pg_table",
         "options": [
-          { "selected": true, "text": "sensor_data_1x", "value": "sensor_data_1x" },
-          { "selected": false, "text": "sensor_data_2x", "value": "sensor_data_2x" },
-          { "selected": false, "text": "sensor_data_4x", "value": "sensor_data_4x" }
+          { "selected": false, "text": "sensor_data_reduzida", "value": "sensor_data_reduzida" },
+          { "selected": false, "text": "sensor_data_intermediaria", "value": "sensor_data_intermediaria" },
+          { "selected": true, "text": "sensor_data_completa", "value": "sensor_data_completa" }
         ],
-        "query": "sensor_data_1x,sensor_data_2x,sensor_data_4x",
+        "query": "sensor_data_reduzida,sensor_data_intermediaria,sensor_data_completa",
         "type": "custom"
       }
     ]

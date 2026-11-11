@@ -1,11 +1,12 @@
 import os
 import glob
 import csv
-from time import time
+from time import time, monotonic_ns
 import psycopg2
 import psycopg2.extras
 from datetime import datetime
 from dotenv import load_dotenv
+from utils.latency_metrics import record_confirmed_batch
 import logging
 import shutil
 
@@ -16,16 +17,12 @@ os.makedirs(logs_dir, exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.FileHandler(os.path.join(logs_dir, "batch_processor.log")),
-        logging.StreamHandler(),
-    ],
 )
 
 load_dotenv()
 load_dotenv("/app/cron.env", override=True)
 
-EXPERIMENT_LABEL = os.getenv("EXPERIMENT_LABEL", "1x")
+EXPERIMENT_LABEL = os.getenv("EXPERIMENT_LABEL", "completa")
 PG_TABLE = os.getenv("PG_TABLE", "sensor_data")
 
 
@@ -75,6 +72,7 @@ class CronBatchProcessor:
             with open(filepath, "r", encoding="utf-8") as csvfile:
                 reader = csv.DictReader(csvfile)
                 batch_data = []
+                latency_records = []
 
                 for row in reader:
                     batch_data.append(
@@ -91,9 +89,16 @@ class CronBatchProcessor:
                         )
                     )
                     records_processed += 1
+                    latency_records.append((row.get("id"), row.get("created_at"), row.get("created_mono_ns"), row.get("clock_id")))
 
                 if batch_data:
                     self.bulk_insert(batch_data)
+                    confirmed_mono_ns = monotonic_ns()
+                    confirmed_at_ms = int(time() * 1000)
+                    try:
+                        record_confirmed_batch("batch", latency_records, confirmed_at_ms, confirmed_mono_ns)
+                    except Exception as exc:
+                        logging.error("LATENCY ERROR: confirmação não registrada para %s mensagens: %s", len(latency_records), exc)
 
             self.move_processed_file(filepath)
 

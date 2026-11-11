@@ -26,7 +26,7 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 project_dir = os.path.dirname(script_dir)
 load_dotenv(os.path.join(project_dir, "docker.env"))
 
-EXPERIMENT_LABEL = os.getenv("EXPERIMENT_LABEL", "1x")
+EXPERIMENT_LABEL = os.getenv("EXPERIMENT_LABEL", "completa")
 PG_TABLE = os.getenv("PG_TABLE", "sensor_data")
 INFLUXDB_BUCKET = os.getenv("INFLUXDB_BUCKET")
 INFLUXDB_TOKEN = os.getenv("INFLUXDB_TOKEN")
@@ -44,7 +44,7 @@ def resolve_host(service_host: str) -> str:
 
 _influx_url = os.getenv("INFLUXDB_URL", "http://localhost:8086")
 if not os.path.exists("/.dockerenv"):
-    _influx_url = _influx_url.replace("http://influxdb:", "http://localhost:")
+    _influx_url = _influx_url.replace("http://influxdb:", "http://127.0.0.1:")
 INFLUXDB_URL = _influx_url
 PG_HOST = resolve_host(os.getenv("PG_HOST", "localhost"))
 PG_PORT = os.getenv(

@@ -1,0 +1,29 @@
+services:
+  postgres:
+    image: postgres:14
+    environment:
+      POSTGRES_USER: grafana
+      POSTGRES_PASSWORD: grafana
+      POSTGRES_DB: iot_batch
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+  influxdb:
+    image: influxdb:2.7
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: admin123
+      DOCKER_INFLUXDB_INIT_ORG: my-org
+      DOCKER_INFLUXDB_INIT_BUCKET: crash_test
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: my-super-token
+    volumes:
+      - influx-data:/var/lib/influxdb2
+      - influx-config:/etc/influxdb2
+  client:
+    image: tcc_comparativo-stream-consumer:latest
+    volumes:
+      - ./persistence_check.py:/app/persistence_check.py:ro
+volumes:
+  postgres-data:
+  influx-data:
+  influx-config:

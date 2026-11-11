@@ -1,0 +1,14 @@
+# Validação de falhas e encerramento em 03/11/2026
+
+Os testes abaixo usam projetos Docker isolados e não constituem as réplicas experimentais.
+
+- **Stream e indisponibilidade do InfluxDB:** uma mensagem foi publicada com o banco indisponível. Após as tentativas de escrita, o consumidor preservou a mensagem em arquivo pendente. O consumidor foi parado e reiniciado; após a volta do banco, o arquivo pendente deixou de existir, a confirmação foi registrada no CSV e o ponto foi consultado no InfluxDB.
+- **Encerramento batch:** antes da correção, `docker compose stop -t 10` aguardou o prazo completo e o container terminou com código 137; a inspeção indicou `OOMKilled=false`. Com tratamento do sinal e gravação do buffer, o mesmo teste terminou com código 0 e gravou uma mensagem pendente uma vez.
+- **Reinício forçado dos bancos:** um registro confirmado foi escrito em cada banco isolado, ambos os processos foram encerrados por `SIGKILL` e os registros foram lidos após a reinicialização dos containers, usando volumes persistentes.
+- **Primeira execução de 60 segundos da planta reduzida:** foram produzidas 3.720 mensagens e registrados 3.720 identificadores de confirmação em cada abordagem. A exportação não foi concluída porque o script controlador foi alterado durante a execução, e foram detectadas linhas duplicadas nos logs batch. Os dados foram marcados como incompletos; a duplicação foi corrigida e será verificada em uma nova execução.
+- **Repetição de 60 segundos da planta reduzida:** 3.722 mensagens produzidas, 3.722 registros em cada banco e 3.722 confirmações únicas e correspondentes por abordagem. Os dois lotes processados foram registrados uma vez cada. O stream encerrou com zero descartes, erros de interpretação, erros de escrita e mensagens na fila. O resumo está em `runs/experimento_reduzida_2026_11_03_01_42_24/metrics/summary_reduzida.json`.
+- **Planta intermediária com 60 segundos:** 7.442 mensagens produzidas e confirmadas em cada abordagem, com conferência de identificadores e sem descartes ou erros de escrita do stream. Resumo em `runs/experimento_intermediaria_2026_11_03_01_52_01/metrics/summary_intermediaria.json`.
+- **Planta completa com 60 segundos:** 14.891 mensagens produzidas e confirmadas em cada abordagem, com conferência de identificadores e sem descartes ou erros de escrita do stream. Resumo em `runs/experimento_completa_2026_11_03_02_00_29/metrics/summary_completa.json`.
+- **Falha de conexão do gerador:** com 25 ativos e um endereço MQTT indisponível, o gerador encerrou com código 1, permitindo que o controlador interrompa a série.
+
+O teste de reinício forçado não simula interrupção de energia ou falha física do host. A fila em memória e o caminho MQTT também não foram submetidos a uma queda abrupta da máquina; não se deve afirmar que todas as mensagens sobrevivem a essa situação.

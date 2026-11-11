@@ -1,0 +1,85 @@
+services:
+  postgres:
+    image: postgres:14@sha256:6dcb6a82dc99cd90b7a81f965b0b08c1ab074095d79634ef80e189d262895d21
+    environment:
+      POSTGRES_USER: grafana
+      POSTGRES_PASSWORD: grafana
+      POSTGRES_DB: iot_batch
+    tmpfs:
+      - /var/lib/postgresql/data
+
+  influxdb:
+    image: influxdb:2.7@sha256:b8d940ca9376f85118260f5b6bd236b8a00b1749c3350c5578d4cde8e27f31f2
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: admin123
+      DOCKER_INFLUXDB_INIT_ORG: my-org
+      DOCKER_INFLUXDB_INIT_BUCKET: iot_stream_reduzida
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: my-super-token
+    tmpfs:
+      - /var/lib/influxdb2
+      - /etc/influxdb2
+
+  mosquitto:
+    image: eclipse-mosquitto:2.0@sha256:09b62ff32c2e7b64d4b431b9a89236073289b68db273de2b089edeb9b0d92b5c
+    volumes:
+      - ../../mosquitto/mosquitto_config:/mosquitto/config:ro
+    tmpfs:
+      - /mosquitto/data
+      - /mosquitto/log
+
+  metrics-db:
+    image: postgres:14@sha256:6dcb6a82dc99cd90b7a81f965b0b08c1ab074095d79634ef80e189d262895d21
+    command: ["postgres", "-c", "experiment.scenario=reduzida"]
+    environment:
+      POSTGRES_USER: grafana
+      POSTGRES_PASSWORD: grafana
+      POSTGRES_DB: experiment_metrics
+    tmpfs:
+      - /var/lib/postgresql/data
+    volumes:
+      - metrics:/metrics:ro
+      - ../../grafana/metrics/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+
+  batch-consumer:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.batch
+    env_file: ../../docker.env.reduzida
+    environment:
+      BATCH_FLUSH_INTERVAL: "${TEST_BATCH_FLUSH_INTERVAL:-5}"
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - batch-output:/app/batches_output
+      - batch-processed:/app/batches_processed
+      - metrics:/app/metrics
+
+  stream-consumer:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.stream
+    env_file: ../../docker.env.reduzida
+    environment:
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - metrics:/app/metrics
+      - batch-output:/app/batches_output:ro
+      - batch-processed:/app/batches_processed:ro
+      - .:/app/integration:ro
+      - ../../scripts/setup_experiment.py:/app/scripts/setup_experiment.py:ro
+      - ../../scripts/export_experiment_metrics.py:/app/scripts/export_experiment_metrics.py:ro
+      - ../../cronjob_executor.py:/app/cronjob_executor.py:ro
+
+  sensor-generator:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.generator
+    env_file: ../../docker.env.reduzida
+    environment:
+      EXECUTION_TIME_SECONDS: "20"
+
+volumes:
+  metrics:
+  batch-output:
+  batch-processed:

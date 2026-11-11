@@ -1,0 +1,7 @@
+services:
+  batch-consumer:
+    image: tcc_comparativo-batch-consumer:latest
+  stream-consumer:
+    image: tcc_comparativo-stream-consumer:latest
+  sensor-generator:
+    image: tcc_comparativo-sensor-generator:latest

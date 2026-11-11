@@ -1,5 +1,6 @@
 from paho.mqtt import client
 from factory_sensors import SENSORS_01, get_sensors_by_location
+from clock_context import CLOCK_ID
 from dotenv import load_dotenv
 from faker import Faker
 from rich.live import Live
@@ -14,7 +15,6 @@ import json
 import os
 import sys
 
-faker = Faker()
 load_dotenv()
 
 # MQTT
@@ -22,8 +22,9 @@ BROKER = os.getenv("MQTT_BROKER")
 PORT = int(os.getenv("MQTT_PORT", 1883))
 TOPIC = os.getenv("MQTT_TOPIC")
 CLIENT_ID = os.getenv("MQTT_CLIENT_ID")
-RATE_MODIFIER = int(os.getenv("RATE_MODIFIER", 1))
-EXPERIMENT_LABEL = os.getenv("EXPERIMENT_LABEL", "1x")
+ACTIVE_ASSET_COUNT = int(os.getenv("ACTIVE_ASSET_COUNT", "100"))
+EXPERIMENT_LABEL = os.getenv("EXPERIMENT_LABEL", "completa")
+EXPERIMENT_SEED = os.getenv("EXPERIMENT_SEED", "20261101")
 
 # Execução
 EXECUTION_TIME = int(os.getenv("EXECUTION_TIME_SECONDS", 3600))
@@ -35,6 +36,8 @@ metrics = {
     "por_maquina": {},
     "conexoes_mqtt": {},
     "threads": 0,
+    "erros_publicacao": 0,
+    "erros_threads": 0,
 }
 metrics_lock = threading.Lock()
 
@@ -62,7 +65,7 @@ def build_metrics_table():
         table.add_row("Mensagens enviadas", str(metrics["total"]))
         table.add_row("Mensagens por segundo", f"{mensagens_por_segundo:.2f} msg/s")
         table.add_row("Mensagens por minuto", f"{mensagens_por_minuto:.2f} msg/min")
-        table.add_row("Máquinas ativas", str(maquinas_ativas))
+        table.add_row("Ativos ativos", str(maquinas_ativas))
         table.add_row("Sensores ativos", str(sensores_ativos))
         table.add_row("Threads ativas", str(metrics["threads"]))
         table.add_row("MQTT status", f"{conexoes_on}/{maquinas_ativas} ON")
@@ -78,13 +81,25 @@ def start_live_dashboard():
             live.update(build_metrics_table())
 
 
-async def generate_sensor_data(sensor):
+def sensor_randomness(sensor):
+    seed = f"{EXPERIMENT_SEED}:{sensor['location']}:{sensor['metric']}"
+    value_random = random.Random(seed)
+    value_faker = Faker()
+    value_faker.seed_instance(seed)
+    phase_seconds = random.Random(f"{seed}:phase").uniform(
+        0, sensor.get("frequency", 1.0)
+    )
+    return value_random, value_faker, phase_seconds
+
+
+async def generate_sensor_data(sensor, value_random, value_faker):
+    created_mono_ns = time.monotonic_ns()
     ts = int(time.time() * 1000)
 
     if "range" in sensor:
-        value = round(random.uniform(*sensor["range"]), 2)
+        value = round(value_random.uniform(*sensor["range"]), 2)
     elif "values" in sensor:
-        value = random.choices(sensor["values"], sensor["weight"])[0]
+        value = value_random.choices(sensor["values"], sensor["weight"])[0]
     else:
         value = None
 
@@ -96,23 +111,28 @@ async def generate_sensor_data(sensor):
         "unit": sensor["unit"],
         "value": value,
         "created_at": ts,
-        "id": faker.uuid4(),
+        "created_mono_ns": created_mono_ns,
+        "clock_id": CLOCK_ID,
+        "id": value_faker.uuid4(),
     }
 
 
 async def sensor_task(sensor, end_time, mqtt_client):
     maquina = sensor["location"]
     metric = sensor["metric"]
+    value_random, value_faker, phase_seconds = sensor_randomness(sensor)
     with metrics_lock:
         metrics["por_maquina"].setdefault(maquina, {})
         metrics["por_maquina"][maquina].setdefault(metric, 0)
+
+    await asyncio.sleep(phase_seconds)
 
     while True:
         now = asyncio.get_event_loop().time()
         if now >= end_time:
             break
 
-        data = await generate_sensor_data(sensor)
+        data = await generate_sensor_data(sensor, value_random, value_faker)
         payload = json.dumps(data)
 
         if TOPIC:
@@ -121,6 +141,9 @@ async def sensor_task(sensor, end_time, mqtt_client):
                 with metrics_lock:
                     metrics["total"] += 1
                     metrics["por_maquina"][maquina][metric] += 1
+            else:
+                with metrics_lock:
+                    metrics["erros_publicacao"] += 1
 
         await asyncio.sleep(sensor.get("frequency", 1.0))
 
@@ -144,16 +167,23 @@ def generate_machine_thread(machine_name, sensors, execution_time):
     end_time = loop.time() + execution_time
     tasks = [sensor_task(sensor, end_time, mqtt_client) for sensor in sensors]
 
-    loop.run_until_complete(asyncio.gather(*tasks))
-    loop.close()
-    mqtt_client.loop_stop()
-    mqtt_client.disconnect()
+    try:
+        loop.run_until_complete(asyncio.gather(*tasks))
+    except Exception as exc:
+        with metrics_lock:
+            metrics["erros_threads"] += 1
+        print(f"❌ Falha no gerador de {machine_name}: {exc}", flush=True)
+    finally:
+        loop.close()
+        mqtt_client.loop_stop()
+        mqtt_client.disconnect()
 
 
 def main():
     print(
         f"🔧 Iniciando gerador [{EXPERIMENT_LABEL}] "
-        f"(RATE_MODIFIER={RATE_MODIFIER}, duração={EXECUTION_TIME}s)..."
+        f"(ativos={ACTIVE_ASSET_COUNT}, seed={EXPERIMENT_SEED}, "
+        f"duração={EXECUTION_TIME}s)..."
     )
     threads = []
 
@@ -161,7 +191,7 @@ def main():
     dashboard_thread.start()
 
     for location, sensors in get_sensors_by_location(
-        SENSORS_01, rate_modifier=RATE_MODIFIER
+        SENSORS_01, active_asset_count=ACTIVE_ASSET_COUNT
     ).items():
         thread = threading.Thread(
             target=generate_machine_thread,
@@ -181,8 +211,15 @@ def main():
         f"✅ Geração finalizada [{EXPERIMENT_LABEL}]: "
         f"{metrics['total']} mensagens em {elapsed:.0f}s."
     )
+    if (len(metrics["conexoes_mqtt"]) != ACTIVE_ASSET_COUNT
+            or not all(metrics["conexoes_mqtt"].values())
+            or len(metrics["por_maquina"]) != ACTIVE_ASSET_COUNT
+            or any(not count for sensors in metrics["por_maquina"].values() for count in sensors.values())
+            or metrics["erros_publicacao"] or metrics["erros_threads"]):
+        print(f"❌ Falha no gerador: publicações={metrics['erros_publicacao']}, threads={metrics['erros_threads']}", flush=True)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
-    sys.exit(0)
+    sys.exit(main())

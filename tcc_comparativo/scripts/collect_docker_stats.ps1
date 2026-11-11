@@ -27,7 +27,7 @@ if ($envVars["METRICS_HOST"]) {
 } else {
     $MetricsDir = Join-Path $Root "metrics"
 }
-$Label = if ($envVars["EXPERIMENT_LABEL"]) { $envVars["EXPERIMENT_LABEL"] } else { "1x" }
+$Label = if ($envVars["EXPERIMENT_LABEL"]) { $envVars["EXPERIMENT_LABEL"] } else { "completa" }
 $ExecutionTime = if ($envVars["EXECUTION_TIME_SECONDS"]) { [int]$envVars["EXECUTION_TIME_SECONDS"] } else { 3600 }
 $Duration = if ($env:COLLECT_DURATION_SECONDS) { [int]$env:COLLECT_DURATION_SECONDS } else { $ExecutionTime + $ExtraSeconds }
 $OutFile = Join-Path $MetricsDir "docker_stats_$Label.csv"

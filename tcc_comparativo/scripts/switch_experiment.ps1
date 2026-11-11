@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("1x", "2x", "4x")]
+    [ValidateSet("reduzida", "intermediaria", "completa")]
     [string]$Profile
 )
 
@@ -27,4 +27,4 @@ Write-Host "  4. docker compose up -d --force-recreate batch-consumer stream-con
 Write-Host "  5. docker compose up sensor-generator"
 Write-Host ""
 Write-Host "Destinos:"
-Select-String -Path $DockerEnv -Pattern "^(EXPERIMENT_LABEL|PG_TABLE|INFLUXDB_BUCKET|RATE_MODIFIER|BATCH_OUTPUT_HOST)=" | ForEach-Object { Write-Host "   $($_.Line)" }
+Select-String -Path $DockerEnv -Pattern "^(EXPERIMENT_LABEL|PG_TABLE|INFLUXDB_BUCKET|ACTIVE_ASSET_COUNT|EXPERIMENT_SEED|BATCH_OUTPUT_HOST)=" | ForEach-Object { Write-Host "   $($_.Line)" }
